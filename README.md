@@ -2,7 +2,7 @@
 
 # 🗂️ Local Multimodal RAG
 
-**离线多媒体文档检索 — 图片、PDF、Office、代码，全部本地处理，不碰云**
+**Offline multimodal document retrieval — images, PDFs, Office, code. Fully local, no cloud required.**
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
