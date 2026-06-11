@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""
+PaddleOCR GPU API Server — persistent service for RAG pipeline.
+
+Uses multiprocessing.Pool with spawn mode to enable parallel OCR on GPU.
+Each worker process independently initializes CUDA and loads PaddleOCR.
+
+Configuration loaded from config.yaml via config_loader.
+
+Usage:
+    python3 ocr_server.py [--port 8002] [--workers 4]
+
+API:
+    POST /ocr
+    Body: {"images": ["/path/to/img1.jpg", "/path/to/img2.png", ...]}
+    Response: {"results": ["text1", null, "text3", ...]}  (null = failed/no text)
+
+    GET /health  → 200 OK
+"""
+
+import os
+import sys
+import json
+import argparse
+import logging
+import multiprocessing
+import socketserver
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
+# Import config loader
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from config_loader import get_config
+    config = get_config()
+    ocr_config = config['ocr']
+    DEFAULT_PORT = ocr_config['port']
+    DEFAULT_WORKERS = ocr_config['workers']
+    OCR_LANG = ocr_config['lang']
+    OCR_USE_GPU = ocr_config.get('use_gpu', True)
+except ImportError:
+    DEFAULT_PORT = 8002
+    DEFAULT_WORKERS = 4
+    OCR_LANG = 'ch'
+    OCR_USE_GPU = True
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+)
+log = logging.getLogger("ocr_server")
+
+# Global worker pool
+_worker_pool = None
+
+
+def init_worker():
+    """Initialize PaddleOCR in each worker process."""
+    global _ocr
+    gpu_label = "GPU" if OCR_USE_GPU else "CPU"
+    log.info(f"Worker {os.getpid()}: Loading PaddleOCR ({gpu_label} mode)...")
+    from paddleocr import PaddleOCR
+    # 抑制 PaddleOCR 内部的 angle classifier WARNING（每张图片都输出一次）
+    import logging as _logging
+    _logging.getLogger('ppocr').setLevel(_logging.ERROR)
+    _ocr = PaddleOCR(
+        use_textline_orientation=True,
+        lang=OCR_LANG,
+        use_gpu=OCR_USE_GPU,
+        cls=True,
+    )
+    log.info(f"Worker {os.getpid()}: ✅ PaddleOCR loaded ({gpu_label} mode)")
+
+
+def ocr_single_image(image_path: str) -> str | None:
+    """OCR a single image in worker process."""
+    global _ocr
+    if not os.path.isfile(image_path):
+        return None
+    try:
+        result = _ocr.ocr(image_path, det=True, rec=True, cls=True)
+        if result and result[0]:
+            texts = []
+            for line in result[0]:
+                if line and len(line) >= 2:
+                    text = line[1][0]
+                    if text.strip():
+                        texts.append(text.strip())
+            return "\n".join(texts) if texts else None
+        return None
+    except Exception as e:
+        log.warning(f"OCR failed for {image_path}: {e}")
+        return None
+
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    """Handle requests in a separate thread."""
+    daemon_threads = True
+
+
+class OCRHandler(BaseHTTPRequestHandler):
+    """HTTP handler for OCR API."""
+
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+
+    def do_POST(self):
+        if self.path == '/ocr':
+            try:
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                data = json.loads(body)
+                image_paths = data.get('images', [])
+
+                if not image_paths:
+                    self._json_response({"results": []})
+                    return
+
+                # Dispatch to worker pool for parallel processing
+                results = _worker_pool.map(ocr_single_image, image_paths)
+                self._json_response({"results": results})
+
+            except Exception as e:
+                log.error(f"Request error: {e}")
+                self.send_error(500, str(e))
+        else:
+            self.send_error(404)
+
+    def _json_response(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+
+    def log_message(self, format, *args):
+        # Suppress default HTTP request logging
+        pass
+
+
+def main():
+    global _worker_pool
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=DEFAULT_PORT, help=f'Server port (default: {DEFAULT_PORT})')
+    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS, help=f'Number of OCR workers (default: {DEFAULT_WORKERS})')
+    parser.add_argument('--config', type=str, default="", help="Path to config.yaml")
+    args = parser.parse_args()
+
+    # Load custom config if specified
+    if args.config:
+        from config_loader import reset_config_cache, load_config
+        reset_config_cache()
+        config = load_config(args.config)
+        ocr_config = config['ocr']
+
+    log.info(f"🚀 Starting OCR API server on port {args.port} with {args.workers} workers (spawn mode)...")
+    
+    # Use spawn context to avoid CUDA context loss from fork
+    ctx = multiprocessing.get_context('spawn')
+    
+    # Create worker pool (each worker loads its own PaddleOCR instance)
+    _worker_pool = ctx.Pool(processes=args.workers, initializer=init_worker)
+    log.info(f"✅ Worker pool created with {args.workers} processes (spawn mode)")
+
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), OCRHandler)
+    server.socket.listen(128)
+    log.info(f"✅ OCR API server ready on http://127.0.0.1:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info("Shutting down...")
+        _worker_pool.close()
+        _worker_pool.join()
+        server.server_close()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,168 @@
+# Local Multimodal RAG Pipeline Configuration
+# ============================================================
+# All paths and parameters are configurable here.
+# Environment variables in .env can override sensitive values.
+
+# === 服务器配置 ===
+server:
+  host: "0.0.0.0"
+  port: 8100
+  cors_origins:
+    - "*"
+
+# Database Configuration
+database:
+  # Main file index database (tracks all processed files)
+  path: "./data/file_index.db"
+  
+# === 文件扫描 ===
+scanner:
+  db_path: "./data/file_index.db"
+  # 扫描路径列表（用户指定）
+  scan_paths:
+    - ~/documents
+    - ~/code
+  # Windows Everything 路径（可选，空值 = 使用 os.walk）
+  everything_exe: ""  # Windows only, e.g. "/mnt/d/Program Files/Everything/es.exe"
+  # Home 路径（Linux/Mac）
+  home_paths:
+    - ~/
+  # 跳过的目录名
+  skip_dirs:
+    - .git
+    - node_modules
+    - __pycache__
+    - .cache
+    - .npm
+    - .local
+    - .venv
+
+# === 元数据提取 ===
+metadata:
+  # 每个磁盘的并行 worker 数
+  workers_per_disk: 4
+  # 单文件处理超时（秒）
+  file_timeout: 20
+  # 日志文件路径
+  log_file: ./logs/meta_extract.log
+  # 最大 pending 任务数（控制内存）
+  max_pending: 200
+
+# Embedding Model Configuration
+embedding:
+  # Jina v5 text-small model path (Matryoshka 512-dim truncation)
+  model_path: "~/models/jina-embeddings-v5-text-small/"
+  # Embedding dimension (512 for Jina v5 small, supports Matryoshka truncation)
+  dimension: 512
+  # Quantization scale for int8 storage
+  int8_scale: 127.0
+  # vLLM embedding service
+  vllm:
+    api_url: "http://localhost:8001"
+    # Model name as registered in vLLM (usually same as model_path)
+    model_name: "~/models/jina-embeddings-v5-text-small/"
+    port: 8001
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.25
+    max_model_len: 16384
+  # Batch sizes
+  batch_size: 4
+  description_batch_size: 8
+
+# OCR Configuration  
+ocr:
+  # PaddleOCR API server URL
+  api_url: "http://127.0.0.1:8002"
+  port: 8002
+  workers: 4
+  # Use GPU for OCR (set to false for CPU-only mode)
+  # CPU mode is slower but works without a GPU
+  # GPU requires paddlepaddle-gpu, CPU uses paddlepaddle
+  use_gpu: true
+  # Language for OCR (ch = Chinese, en = English, etc.)
+  lang: "ch"
+  
+# Chunking Configuration
+chunking:
+  # Maximum chars per chunk (greedy merge target)
+  max_chars: 12000
+  # Overlap ratio between chunks (0.05 = 5%)
+  overlap_ratio: 0.05
+  # Minimum text chars to consider valid (skip files below this)
+  min_text_chars: 500
+  # Lower threshold for images/screenshots (charts, diagrams)
+  min_text_chars_low: 50
+
+# File Processing Limits
+limits:
+  # Minimum media file size to process (skip tiny icons/decorations)
+  min_media_bytes: 10240  # 10KB
+  # Maximum image file size to OCR (avoid timeout/GPU memory issues)
+  max_image_bytes: 104857600  # 100MB
+  # Maximum text file size to read (avoid OOM)
+  max_text_file_bytes: 52428800  # 50MB
+  # Maximum djvu pages to process (avoid hours-long processing)
+  max_djvu_pages: 500
+  # Maximum pages to describe with vision model
+  max_describe_pages: 500
+
+# === 视觉模型 (OpenAI 兼容) ===
+# 支持多个端点，按顺序 fallback
+vision:
+  endpoints:
+    # 本地 LMStudio / Ollama / vLLM（推荐）
+    - api_base: "http://localhost:1234/v1"
+      api_key: ""  # 从 .env 读取 LMSTUDIO_API_KEY
+      model: "qwen2.5-vl-7b"  # 或其他 OpenAI 兼容视觉模型
+      max_tokens: 2048
+      timeout: 60
+      name: "lmstudio"
+      max_parallel: 2  # 本地端点最大并行数
+    # Qwen 云端（备用）
+    - api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      api_key: ""  # 从 .env 读取 QWEN_API_KEY
+      model: "qwen-vl-max"
+      max_tokens: 8192
+      timeout: 120
+      name: "qwen_cloud"
+      rate_limit: 60  # 云端速率限制（秒/请求）
+  # 全局配置
+  max_workers: 2  # 最大并行 worker
+  max_retries: 3  # 最大重试次数
+  
+# Pipeline Configuration
+pipeline:
+  # Number of extractor worker processes
+  extractor_threads: 8
+  # Audio transcription threads per worker
+  audio_threads: 8
+  # Chunk queue size (prevent producer blocking)
+  chunk_queue_size: 10000
+  # File batch size for streaming processing
+  stream_batch_size: 10
+  # Maximum retries for vision model
+  max_retries: 3
+  # Fetch limit for describer threads
+  fetch_limit: 20
+
+# === 搜索 ===
+search:
+  default_top_k: 50
+  max_top_k: 200
+
+# === 日志 ===
+logging:
+  dir: "./logs"
+  level: INFO
+  
+# File Monitoring (optional - for future use)
+monitor:
+  # Directories to monitor for new files
+  directories:
+    - "/mnt/h/"
+    - "/mnt/e/"
+  # File types to include (all if empty)
+  include_types: []
+  # File types to exclude
+  exclude_types:
+    - "video"  # Videos are skipped in this pipeline

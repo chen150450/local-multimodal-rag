@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Local Multimodal RAG</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #f8f9fa;
+            color: #333;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        header p { font-size: 1.1em; opacity: 0.9; }
+        
+        .search-box {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1.2em;
+            transition: border-color 0.3s;
+        }
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .search-box button {
+            margin-top: 15px;
+            padding: 12px 30px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .search-box button:hover { background: #5a6fd6; }
+        
+        .results { margin-top: 20px; }
+        .result-item {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.1);
+        }
+        .result-item .path {
+            color: #667eea;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        .result-item .score {
+            color: #28a745;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        .result-item .snippet {
+            color: #666;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+        
+        .api-links {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .api-links h2 { margin-bottom: 15px; color: #333; }
+        .api-link {
+            display: block;
+            padding: 12px 15px;
+            margin: 8px 0;
+            background: #f5f5f5;
+            border-radius: 6px;
+            color: #667eea;
+            text-decoration: none;
+            transition: background 0.3s;
+        }
+        .api-link:hover { background: #e8e8e8; }
+        .api-link .desc {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 4px;
+        }
+        
+        .status {
+            margin-top: 30px;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status h2 { margin-bottom: 15px; }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .status-item:last-child { border-bottom: none; }
+        .status-ok { color: #28a745; }
+        .status-err { color: #dc3545; }
+        
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🚀 Local Multimodal RAG</h1>
+        <p>本地多模态检索增强生成系统</p>
+    </header>
+    
+    <div class="container">
+        <div class="search-box">
+            <input type="text" id="query" placeholder="输入搜索关键词..." />
+            <button onclick="doSearch()">搜索</button>
+            <div class="results" id="results"></div>
+        </div>
+        
+        <div class="api-links">
+            <h2>API 端点</h2>
+            <a href="/api/health" class="api-link">
+                <strong>/api/health</strong>
+                <span class="desc">健康检查</span>
+            </a>
+            <a href="/api/config" class="api-link">
+                <strong>/api/config</strong>
+                <span class="desc">当前配置（API keys 已脱敏）</span>
+            </a>
+            <a href="/api/config/status" class="api-link">
+                <strong>/api/config/status</strong>
+                <span class="desc">组件状态检查</span>
+            </a>
+            <a href="/api/stats" class="api-link">
+                <strong>/api/stats</strong>
+                <span class="desc">数据库统计</span>
+            </a>
+            <a href="/docs" class="api-link">
+                <strong>/docs</strong>
+                <span class="desc">OpenAPI 文档（Swagger UI）</span>
+            </a>
+        </div>
+        
+        <div class="status">
+            <h2>系统状态</h2>
+            <div id="statusContent">加载中...</div>
+        </div>
+    </div>
+    
+    <footer>
+        Local Multimodal RAG v1.0 | FastAPI Backend
+    </footer>
+    
+    <script>
+        async function loadStatus() {
+            try {
+                const resp = await fetch('/api/config/status');
+                const data = await resp.json();
+                
+                let html = '';
+                html += `<div class="status-item">
+                    <span>数据库</span>
+                    <span class="${data.database.connected ? 'status-ok' : 'status-err'}">
+                        ${data.database.connected ? '✅ 已连接' : '❌ 未连接'}
+                    </span>
+                </div>`;
+                html += `<div class="status-item">
+                    <span>嵌入服务</span>
+                    <span class="${data.embedding.available ? 'status-ok' : 'status-err'}">
+                        ${data.embedding.available ? '✅ 可用' : '❌ 不可用'}
+                    </span>
+                </div>`;
+                html += `<div class="status-item">
+                    <span>OCR 服务</span>
+                    <span class="${data.ocr.available ? 'status-ok' : 'status-err'}">
+                        ${data.ocr.available ? '✅ 可用' : '❌ 不可用'}
+                    </span>
+                </div>`;
+                html += `<div class="status-item">
+                    <span>视觉模型</span>
+                    <span class="${data.vision.available ? 'status-ok' : 'status-err'}">
+                        ${data.vision.available ? '✅ 可用' : '❌ 不可用'}
+                    </span>
+                </div>`;
+                
+                document.getElementById('statusContent').innerHTML = html;
+            } catch (e) {
+                document.getElementById('statusContent').innerHTML = 
+                    '<span class="status-err">无法加载状态</span>';
+            }
+        }
+        
+        async function doSearch() {
+            const query = document.getElementById('query').value;
+            if (!query) return;
+            
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '搜索中...';
+            
+            try {
+                const resp = await fetch('/api/search?q=' + encodeURIComponent(query) + '&top_k=50');
+                const data = await resp.json();
+                
+                if (data.results.length === 0) {
+                    resultsDiv.innerHTML = '未找到相关结果';
+                    return;
+                }
+                
+                let html = `<p>找到 ${data.total} 个结果</p>`;
+                for (const r of data.results.slice(0, 20)) {
+                    html += `<div class="result-item">
+                        <div class="path">${r.path}</div>
+                        <div class="score">相似度: ${(r.score * 100).toFixed(1)}%</div>
+                        <div class="snippet">${r.snippet || '(无摘要)'}</div>
+                    </div>`;
+                }
+                resultsDiv.innerHTML = html;
+            } catch (e) {
+                resultsDiv.innerHTML = '搜索失败: ' + e.message;
+            }
+        }
+        
+        // 页面加载时获取状态
+        loadStatus();
+        
+        // 回车搜索
+        document.getElementById('query').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') doSearch();
+        });
+    </script>
+</body>
+</html>

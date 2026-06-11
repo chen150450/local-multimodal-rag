@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置管理 - Local Multimodal RAG</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-logo">🔍 LMR</div>
+    <nav class="header-nav">
+      <a href="index.html">搜索</a>
+      <a href="config.html" class="active">配置</a>
+      <button class="theme-toggle" id="themeToggle" title="切换主题">🌙</button>
+    </nav>
+  </header>
+
+  <!-- Status Bar -->
+  <div class="status-bar" id="statusBar">
+    <div class="status-item"><span class="status-dot yellow" id="dot-server"></span> 服务器</div>
+    <div class="status-item"><span class="status-dot yellow" id="dot-database"></span> 数据库</div>
+    <div class="status-item"><span class="status-dot yellow" id="dot-embedding"></span> 嵌入模型</div>
+    <div class="status-item"><span class="status-dot yellow" id="dot-ocr"></span> OCR</div>
+    <div class="status-item"><span class="status-dot yellow" id="dot-vision"></span> 视觉模型</div>
+    <div class="status-item"><span class="status-dot yellow" id="dot-index"></span> 索引</div>
+  </div>
+
+  <!-- Config Layout -->
+  <div class="config-layout">
+    <!-- Sidebar -->
+    <aside class="config-sidebar" id="configSidebar">
+      <button class="config-sidebar-item active" data-section="server">🖥️ 服务器</button>
+      <button class="config-sidebar-item" data-section="scan">📁 文件扫描</button>
+      <button class="config-sidebar-item" data-section="metadata">⚙️ 元数据</button>
+      <button class="config-sidebar-item" data-section="embedding">🧠 嵌入模型</button>
+      <button class="config-sidebar-item" data-section="ocr">👁️ OCR</button>
+      <button class="config-sidebar-item" data-section="vision">🎨 视觉模型</button>
+      <button class="config-sidebar-item" data-section="chunk">📦 分块</button>
+      <button class="config-sidebar-item" data-section="search">🔍 搜索</button>
+      <button class="config-sidebar-item" data-section="logging">📝 日志</button>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="config-main">
+
+      <!-- Server -->
+      <div class="config-section active" id="section-server">
+        <h2>服务器配置</h2>
+        <p class="config-section-desc">HTTP 服务器基本设置</p>
+        <div class="config-field">
+          <label>Host</label>
+          <input type="text" data-path="server.host" placeholder="0.0.0.0">
+        </div>
+        <div class="config-field">
+          <label>Port</label>
+          <input type="number" data-path="server.port" placeholder="8000">
+        </div>
+        <div class="config-field">
+          <label>CORS Origins</label>
+          <input type="text" data-path="server.cors_origins" placeholder="*">
+          <div class="hint">逗号分隔，如 http://localhost:3000,https://example.com</div>
+        </div>
+      </div>
+
+      <!-- Scan -->
+      <div class="config-section" id="section-scan">
+        <h2>文件扫描</h2>
+        <p class="config-section-desc">配置文件扫描路径和排除规则</p>
+        <div class="config-field">
+          <label>Everything EXE 路径</label>
+          <input type="text" data-path="scan.everything_exe" placeholder="C:\Program Files\Everything\Everything.exe">
+        </div>
+        <div class="config-field">
+          <label>扫描路径</label>
+          <div class="list-editor" id="scanPathsList"></div>
+          <button class="btn-add" onclick="window.__addScanPath()">+ 添加路径</button>
+        </div>
+        <div class="config-field">
+          <label>跳过目录</label>
+          <div class="list-editor" id="skipDirsList"></div>
+          <button class="btn-add" onclick="window.__addSkipDir()">+ 添加目录</button>
+        </div>
+      </div>
+
+      <!-- Metadata -->
+      <div class="config-section" id="section-metadata">
+        <h2>元数据处理</h2>
+        <p class="config-section-desc">文件元数据提取的并发和超时设置</p>
+        <div class="config-field">
+          <label>Workers（并发数）</label>
+          <input type="number" data-path="metadata.workers" placeholder="4">
+        </div>
+        <div class="config-field">
+          <label>Timeout（秒）</label>
+          <input type="number" data-path="metadata.timeout" placeholder="30">
+        </div>
+      </div>
+
+      <!-- Embedding -->
+      <div class="config-section" id="section-embedding">
+        <h2>嵌入模型</h2>
+        <p class="config-section-desc">文本嵌入模型配置</p>
+        <div class="config-field">
+          <label>模型路径</label>
+          <input type="text" data-path="embedding.model_path" placeholder="/path/to/model">
+        </div>
+        <div class="config-field">
+          <label>向量维度</label>
+          <input type="number" data-path="embedding.dim" placeholder="768">
+        </div>
+        <div class="config-field">
+          <label>vLLM URL</label>
+          <input type="text" data-path="embedding.vllm_url" placeholder="http://localhost:8001/v1">
+        </div>
+      </div>
+
+      <!-- OCR -->
+      <div class="config-section" id="section-ocr">
+        <h2>OCR 配置</h2>
+        <p class="config-section-desc">光学字符识别服务设置</p>
+        <div class="config-field">
+          <label>API URL</label>
+          <input type="text" data-path="ocr.api_url" placeholder="http://localhost:8002/ocr">
+        </div>
+        <div class="config-field">
+          <label>Workers（并发数）</label>
+          <input type="number" data-path="ocr.workers" placeholder="2">
+        </div>
+      </div>
+
+      <!-- Vision -->
+      <div class="config-section" id="section-vision">
+        <h2>视觉模型</h2>
+        <p class="config-section-desc">图像理解模型端点配置</p>
+        <div class="list-editor" id="visionEndpoints"></div>
+        <button class="btn-add" onclick="window.__addEndpoint()">+ 添加端点</button>
+      </div>
+
+      <!-- Chunk -->
+      <div class="config-section" id="section-chunk">
+        <h2>分块设置</h2>
+        <p class="config-section-desc">文本分块参数</p>
+        <div class="config-field">
+          <label>Max Chars（最大字符数）</label>
+          <input type="number" data-path="chunk.max_chars" placeholder="1000">
+        </div>
+        <div class="config-field">
+          <label>Overlap Ratio（重叠比例）</label>
+          <input type="number" step="0.01" data-path="chunk.overlap_ratio" placeholder="0.15">
+          <div class="hint">0.0 ~ 1.0，推荐 0.1 ~ 0.2</div>
+        </div>
+      </div>
+
+      <!-- Search -->
+      <div class="config-section" id="section-search">
+        <h2>搜索配置</h2>
+        <p class="config-section-desc">默认搜索参数</p>
+        <div class="config-field">
+          <label>Default Top K</label>
+          <input type="number" data-path="search.default_top_k" placeholder="10">
+        </div>
+        <div class="config-field">
+          <label>Max Top K</label>
+          <input type="number" data-path="search.max_top_k" placeholder="100">
+        </div>
+      </div>
+
+      <!-- Logging -->
+      <div class="config-section" id="section-logging">
+        <h2>日志配置</h2>
+        <p class="config-section-desc">日志输出设置</p>
+        <div class="config-field">
+          <label>日志目录</label>
+          <input type="text" data-path="logging.dir" placeholder="./logs">
+        </div>
+        <div class="config-field">
+          <label>日志级别</label>
+          <select data-path="logging.level">
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Action Bar -->
+      <div class="action-bar">
+        <button class="btn btn-primary" id="saveBtn">💾 保存配置</button>
+        <button class="btn btn-secondary" id="reloadBtn">🔄 重新加载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+  (function() {
+    'use strict';
+
+    // === Theme ===
+    const themeToggle = document.getElementById('themeToggle');
+    const saved = localStorage.getItem('lmr-theme');
+    if (saved === 'dark') { document.documentElement.setAttribute('data-theme', 'dark'); themeToggle.textContent = '☀️'; }
+
+    themeToggle.addEventListener('click', () => {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      document.documentElement.setAttribute('data-theme', isDark ? '' : 'dark');
+      themeToggle.textContent = isDark ? '🌙' : '☀️';
+      localStorage.setItem('lmr-theme', isDark ? 'light' : 'dark');
+    });
+
+    // === Toast ===
+    function showToast(msg, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      toast.textContent = msg;
+      container.appendChild(toast);
+      setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 4000);
+    }
+
+    // === Sidebar Navigation ===
+    const sidebar = document.getElementById('configSidebar');
+    sidebar.addEventListener('click', (e) => {
+      const item = e.target.closest('.config-sidebar-item');
+      if (!item) return;
+      sidebar.querySelectorAll('.config-sidebar-item').forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+      document.querySelectorAll('.config-section').forEach(s => s.classList.remove('active'));
+      const section = document.getElementById('section-' + item.dataset.section);
+      if (section) section.classList.add('active');
+    });
+
+    // === Config Data ===
+    let configData = {};
+
+    // === Load Config ===
+    function loadConfig() {
+      fetch('/api/config')
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          configData = data.config || data;
+          fillForm(configData);
+          loadStatus();
+        })
+        .catch(err => showToast('加载配置失败: ' + err.message, 'error'));
+    }
+
+    function fillForm(cfg) {
+      // Simple fields
+      document.querySelectorAll('[data-path]').forEach(input => {
+        const val = getByPath(cfg, input.dataset.path);
+        if (val !== undefined && val !== null) {
+          input.value = val;
+        }
+      });
+
+      // List fields
+      const scanPaths = getByPath(cfg, 'scan.scan_paths') || [];
+      renderListEditor('scanPathsList', scanPaths);
+
+      const skipDirs = getByPath(cfg, 'scan.skip_dirs') || [];
+      renderListEditor('skipDirsList', skipDirs);
+
+      // Vision endpoints
+      const endpoints = getByPath(cfg, 'vision.endpoints') || [];
+      renderEndpoints(endpoints);
+    }
+
+    function getByPath(obj, path) {
+      return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+    }
+
+    function setByPath(obj, path, val) {
+      const keys = path.split('.');
+      let cur = obj;
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (!cur[keys[i]] || typeof cur[keys[i]] !== 'object') cur[keys[i]] = {};
+        cur = cur[keys[i]];
+      }
+      cur[keys[keys.length - 1]] = val;
+    }
+
+    // === List Editor ===
+    function renderListEditor(containerId, items) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      items.forEach((item, i) => {
+        const row = document.createElement('div');
+        row.className = 'list-item-row';
+        row.innerHTML = `
+          <input type="text" value="${escapeAttr(item)}" data-list="${containerId}" data-index="${i}">
+          <button class="btn-icon danger" onclick="window.__removeListItem('${containerId}', ${i})" title="删除">✕</button>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    window.__addScanPath = function() {
+      const container = document.getElementById('scanPathsList');
+      const idx = container.children.length;
+      const row = document.createElement('div');
+      row.className = 'list-item-row';
+      row.innerHTML = `
+        <input type="text" value="" data-list="scanPathsList" data-index="${idx}" placeholder="输入路径...">
+        <button class="btn-icon danger" onclick="window.__removeListItem('scanPathsList', ${idx})" title="删除">✕</button>
+      `;
+      container.appendChild(row);
+    };
+
+    window.__addSkipDir = function() {
+      const container = document.getElementById('skipDirsList');
+      const idx = container.children.length;
+      const row = document.createElement('div');
+      row.className = 'list-item-row';
+      row.innerHTML = `
+        <input type="text" value="" data-list="skipDirsList" data-index="${idx}" placeholder="输入目录名...">
+        <button class="btn-icon danger" onclick="window.__removeListItem('skipDirsList', ${idx})" title="删除">✕</button>
+      `;
+      container.appendChild(row);
+    };
+
+    window.__removeListItem = function(containerId, idx) {
+      const container = document.getElementById(containerId);
+      const rows = container.querySelectorAll('.list-item-row');
+      if (rows[idx]) rows[idx].remove();
+    };
+
+    function getListValues(containerId) {
+      const container = document.getElementById(containerId);
+      return Array.from(container.querySelectorAll('input')).map(i => i.value.trim()).filter(v => v);
+    }
+
+    // === Vision Endpoints ===
+    function renderEndpoints(endpoints) {
+      const container = document.getElementById('visionEndpoints');
+      container.innerHTML = '';
+      endpoints.forEach((ep, i) => {
+        const card = document.createElement('div');
+        card.className = 'endpoint-card';
+        card.dataset.epIndex = i;
+        card.innerHTML = `
+          <div class="endpoint-card-header">
+            <span>端点 #${i + 1}</span>
+            <button class="btn-icon danger" onclick="window.__removeEndpoint(${i})" title="删除端点">✕</button>
+          </div>
+          <div class="config-field">
+            <label>API Base</label>
+            <input type="text" value="${escapeAttr(ep.api_base || '')}" data-ep="${i}" data-ep-field="api_base" placeholder="http://localhost:8080/v1">
+          </div>
+          <div class="config-field">
+            <label>API Key</label>
+            <input type="text" value="${escapeAttr(ep.api_key || '')}" data-ep="${i}" data-ep-field="api_key" placeholder="sk-...">
+          </div>
+          <div class="config-field">
+            <label>Model</label>
+            <input type="text" value="${escapeAttr(ep.model || '')}" data-ep="${i}" data-ep-field="model" placeholder="qwen-vl-max">
+          </div>
+          <div class="config-field">
+            <label>Max Tokens</label>
+            <input type="number" value="${ep.max_tokens || 4096}" data-ep="${i}" data-ep-field="max_tokens">
+          </div>
+          <div class="config-field">
+            <label>Timeout（秒）</label>
+            <input type="number" value="${ep.timeout || 60}" data-ep="${i}" data-ep-field="timeout">
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    window.__addEndpoint = function() {
+      const container = document.getElementById('visionEndpoints');
+      const idx = container.querySelectorAll('.endpoint-card').length;
+      const card = document.createElement('div');
+      card.className = 'endpoint-card';
+      card.dataset.epIndex = idx;
+      card.innerHTML = `
+        <div class="endpoint-card-header">
+          <span>端点 #${idx + 1}</span>
+          <button class="btn-icon danger" onclick="window.__removeEndpoint(${idx})" title="删除端点">✕</button>
+        </div>
+        <div class="config-field"><label>API Base</label><input type="text" value="" data-ep="${idx}" data-ep-field="api_base" placeholder="http://localhost:8080/v1"></div>
+        <div class="config-field"><label>API Key</label><input type="text" value="" data-ep="${idx}" data-ep-field="api_key" placeholder="sk-..."></div>
+        <div class="config-field"><label>Model</label><input type="text" value="" data-ep="${idx}" data-ep-field="model" placeholder="qwen-vl-max"></div>
+        <div class="config-field"><label>Max Tokens</label><input type="number" value="4096" data-ep="${idx}" data-ep-field="max_tokens"></div>
+        <div class="config-field"><label>Timeout（秒）</label><input type="number" value="60" data-ep="${idx}" data-ep-field="timeout"></div>
+      `;
+      container.appendChild(card);
+    };
+
+    window.__removeEndpoint = function(idx) {
+      const container = document.getElementById('visionEndpoints');
+      const cards = container.querySelectorAll('.endpoint-card');
+      if (cards[idx]) cards[idx].remove();
+    };
+
+    function getEndpoints() {
+      const container = document.getElementById('visionEndpoints');
+      const cards = container.querySelectorAll('.endpoint-card');
+      const endpoints = [];
+      cards.forEach(card => {
+        const ep = {};
+        card.querySelectorAll('[data-ep-field]').forEach(input => {
+          const field = input.dataset.epField;
+          ep[field] = field === 'max_tokens' || field === 'timeout' ? parseInt(input.value) || 0 : input.value;
+        });
+        endpoints.push(ep);
+      });
+      return endpoints;
+    }
+
+    // === Status ===
+    function loadStatus() {
+      fetch('/api/config/status')
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          updateDot('dot-server', data.server);
+          updateDot('dot-database', data.database);
+          updateDot('dot-embedding', data.embedding);
+          updateDot('dot-ocr', data.ocr);
+          updateDot('dot-vision', data.vision);
+        })
+        .catch(err => {
+          // Status endpoint may not be available
+          document.querySelectorAll('.status-dot').forEach(d => { d.className = 'status-dot red'; });
+        });
+    }
+
+    function updateDot(dotId, status) {
+      const dot = document.getElementById(dotId);
+      if (!dot) return;
+      // Server returns objects like {connected: true, available: true} or strings
+      let available = status;
+      if (typeof status === 'object' && status !== null) {
+        available = status.connected || status.available || status.running;
+      }
+      if (available === true || available === 'ok' || available === 'running' || available === 'ready') {
+        dot.className = 'status-dot green';
+      } else if (available === false || available === 'error' || available === 'stopped') {
+        dot.className = 'status-dot red';
+      } else {
+        dot.className = 'status-dot yellow';
+      }
+    }
+
+    // === Save ===
+    document.getElementById('saveBtn').addEventListener('click', () => {
+      // Collect form data
+      const cfg = JSON.parse(JSON.stringify(configData));
+
+      document.querySelectorAll('[data-path]').forEach(input => {
+        let val = input.value;
+        if (input.type === 'number') val = val.includes('.') ? parseFloat(val) : parseInt(val) || 0;
+        setByPath(cfg, input.dataset.path, val);
+      });
+
+      // Lists
+      if (!cfg.scan) cfg.scan = {};
+      cfg.scan.scan_paths = getListValues('scanPathsList');
+      cfg.scan.skip_dirs = getListValues('skipDirsList');
+
+      // Vision
+      if (!cfg.vision) cfg.vision = {};
+      cfg.vision.endpoints = getEndpoints();
+
+      fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: cfg })
+      })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`); return r.json(); })
+      .then(() => showToast('配置已保存', 'success'))
+      .catch(err => showToast('保存失败: ' + err.message, 'error'));
+    });
+
+    // === Reload ===
+    document.getElementById('reloadBtn').addEventListener('click', () => {
+      fetch('/api/config/reload', { method: 'POST' })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(() => {
+          showToast('配置已重新加载', 'success');
+          loadConfig();
+        })
+        .catch(err => showToast('重新加载失败: ' + err.message, 'error'));
+    });
+
+    // === Helpers ===
+    function escapeAttr(s) {
+      if (!s) return '';
+      return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // === Init ===
+    loadConfig();
+  })();
+  </script>
+</body>
+</html>
