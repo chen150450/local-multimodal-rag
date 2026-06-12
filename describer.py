@@ -280,7 +280,17 @@ def render_djvu_to_images(djvu_path: str) -> List[bytes]:
 
 def render_file_to_images(file_path: str) -> List[bytes]:
     """根据文件类型渲染为图片列表。返回空列表表示不支持或失败。"""
-    ext = Path(file_path).suffix.lower()
+    # 获取扩展名：优先用 suffix，对于 '.jpg' 这种特殊文件名（只有扩展名没有主文件名）
+    # suffix 返回空字符串，需要用 name 作为 fallback
+    p = Path(file_path)
+    ext = p.suffix.lower()
+    if not ext:
+        # 文件名以 . 开头且没有其他 .，如 '.jpg'，把整个文件名当作扩展名
+        name = p.name.lower()
+        if name.startswith('.'):
+            ext = name  # e.g. '.jpg'
+        else:
+            ext = ''
 
     if ext in IMAGE_EXTS:
         try:
@@ -513,6 +523,24 @@ def _process_file(file_id: int, file_path: str, reason: str) -> Tuple[bool, str]
     images = render_file_to_images(file_path)
     if not images:
         log.warning(f"No images generated for {file_path}")
+        # 标记为失败，避免无限重试
+        fail_source = f"{backend.replace('_api', '')}_failed" if backend == 'qwen_api' else f"{backend}_failed"
+        try:
+            with _db_lock:
+                conn = _get_db()
+                c = conn.cursor()
+                c.execute("""
+                    INSERT INTO rag_descriptions (file_id, description, source, embedded, retry_count)
+                    VALUES (?, '', ?, 0, 1)
+                    ON CONFLICT(file_id) DO UPDATE SET
+                        source = ?,
+                        retry_count = retry_count + 1,
+                        created_at = CURRENT_TIMESTAMP
+                """, (file_id, fail_source, fail_source))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            log.error(f"Failed to write failure marker for {file_path}: {e}")
         return False, 'render_failed'
 
     images_b64 = [encode_image_to_base64(img) for img in images]

@@ -608,12 +608,13 @@ def _extract_pdf_image_ocr(file_id: int, path: str, media_meta: Optional[str]) -
         log.warning("PyMuPDF or Pillow not installed, skipping image PDF")
         return []
 
-    RENDER_DPI = 150  # PDF rendering resolution (150 DPI for OCR)
+    RENDER_DPI = 150  # PDF rendering resolution (150 DPI for OCR quality)
 
-    # PyMuPDF 不支持非 ASCII 路径，用 stream 模式打开
+    # Pre-read PDF to memory (avoid repeated I/O for large files)
     try:
         with open(path, 'rb') as f:
-            doc = fitz.open(stream=f.read(), filetype='pdf')
+            pdf_data = f.read()
+        doc = fitz.open(stream=pdf_data, filetype='pdf')
     except Exception as e:
         log.warning(f"Failed to open PDF {path}: {e}")
         return []
@@ -621,23 +622,31 @@ def _extract_pdf_image_ocr(file_id: int, path: str, media_meta: Optional[str]) -
     total_pages = len(doc)
 
     import tempfile
-    tmp_dir = os.path.join(tempfile.gettempdir(), 'rag_pdf_pages')
+    tmp_dir = os.path.join(tempfile.gettempdir(), f'rag_pdf_{file_id}')
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # 单线程顺序渲染（PyMuPDF 不是线程安全的，多线程共享 Document 会 segfault）
+    # Render pages (single-threaded, PyMuPDF Document is not thread-safe)
     image_paths = []
     for page_num in range(total_pages):
         try:
             page = doc[page_num]
             pix = page.get_pixmap(dpi=RENDER_DPI)
+            # Use JPEG instead of PNG (faster encoding, smaller files)
+            tmp_path = os.path.join(tmp_dir, f'page_{page_num+1}.jpg')
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            tmp_path = os.path.join(tmp_dir, f'pdf_{file_id}_page_{page_num+1}.png')
-            img.save(tmp_path, 'PNG')
+            img.save(tmp_path, 'JPEG', quality=85)
             image_paths.append(tmp_path)
         except Exception as e:
             log.warning(f"Error rendering page {page_num+1}: {e}")
-        if (page_num + 1) % 50 == 0:
+        if (page_num + 1) % 100 == 0:
             log.info(f"Rendered {page_num+1}/{total_pages} pages")
+
+    # Close PDF document and free memory
+    try:
+        doc.close()
+    except Exception:
+        pass
+    del pdf_data
 
     # Close PDF document
     try:
@@ -1032,114 +1041,401 @@ def _extract_audio(file_id: int, path: str, file_size: int = 0, media_meta: str 
 
 
 def _extract_ebook(file_id: int, path: str, ext: str, media_meta: str = None) -> List[ChunkData]:
-    """Ebook: extract text -> greedy chunk."""
+    """Ebook: extract text + embedded images OCR.
+    
+    Strategy:
+    1. Extract text from ebook format
+    2. If text is sufficient -> chunk and return
+    3. If text is insufficient -> extract embedded images and OCR
+    4. If OCR yields text -> chunk and return
+    5. If all fails -> mark as insufficient (same as PDF)
+    """
+    import tempfile
+    tmp_dir = os.path.join(tempfile.gettempdir(), f'rag_ebook_{file_id}')
+    os.makedirs(tmp_dir, exist_ok=True)
+    
     text = ""
+    image_paths = []
 
-    if ext.lower() == '.epub':
-        epub_tmp = None
-        try:
-            import ebooklib
-            from ebooklib import epub
-            from bs4 import BeautifulSoup
-            import uuid
-            # ebooklib 不支持非 ASCII 路径
-            epub_tmp = f'/tmp/rag_epub_{os.getpid()}_{uuid.uuid4().hex}.epub'
-            shutil.copyfile(path, epub_tmp)
+    try:
+        if ext.lower() == '.epub':
+            text, image_paths = _extract_epub_content(path, tmp_dir)
+
+        elif ext.lower() == '.mobi':
+            text, image_paths = _extract_mobi_content(path, tmp_dir)
             
-            book = epub.read_epub(epub_tmp)
-            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                content_bytes = item.get_content().decode('utf-8', errors='replace')
-                if not content_bytes.strip():
-                    continue
-                content_bytes = re.sub(r'<style[^>]*>.*?</style>', '', content_bytes, flags=re.DOTALL | re.IGNORECASE)
-                content_bytes = re.sub(r'<script[^>]*>.*?</script>', '', content_bytes, flags=re.DOTALL | re.IGNORECASE)
-                content_bytes = re.sub(r'<img[^>]*/?>', '', content_bytes, flags=re.IGNORECASE)
-                content_bytes = re.sub(r'<link[^>]*/?>', '', content_bytes, flags=re.IGNORECASE)
-                soup = BeautifulSoup(content_bytes, 'html.parser')
-                for tag in soup.find_all(['h1', 'h2', 'h3', 'h4']):
-                    tag.replace_with(f"\n\n{tag.get_text()}\n\n")
-                for tag in soup.find_all('li'):
-                    tag.replace_with(f"\n- {tag.get_text()}")
-                clean = soup.get_text(separator='\n')
-                clean = re.sub(r'\n{3,}', '\n\n', clean)
-                text += clean + "\n"
-        except Exception:
+        elif ext.lower() == '.azw3':
+            text, image_paths = _extract_azw3_content(path, tmp_dir)
+            
+        elif ext.lower() == '.fb2':
+            text, image_paths = _extract_fb2_content(path, tmp_dir)
+            
+        else:
             text = _read_file(path) or ""
-        finally:
-            # 清理临时文件
-            if epub_tmp and os.path.exists(epub_tmp):
-                try:
-                    os.remove(epub_tmp)
-                except Exception:
-                    pass
 
-    elif ext.lower() in ('.mobi', '.azw3'):
-        import subprocess, tempfile
-        try:
-            if ext.lower() == '.mobi':
-                import mobi
-                tempdir, filepath = mobi.extract(path)
-                from bs4 import BeautifulSoup
-                html_path = None
-                for root, dirs, files in os.walk(tempdir):
-                    for f in files:
-                        if f.endswith(('.html', '.htm')):
-                            html_path = os.path.join(root, f)
-                            break
-                if html_path:
-                    with open(html_path, 'r', encoding='utf-8', errors='replace') as f:
-                        soup = BeautifulSoup(f.read(), 'html.parser')
-                        text = soup.get_text(separator='\n')
-                shutil.rmtree(tempdir, ignore_errors=True)
-            else:
-                import tempfile as _tf
-                _out_txt = _tf.mktemp(suffix='.txt')
-                try:
-                    r = subprocess.run(['ebook-convert', path, _out_txt],
-                                       capture_output=True, text=True, timeout=60)
-                    if r.returncode == 0 and os.path.exists(_out_txt):
-                        with open(_out_txt, 'r', encoding='utf-8', errors='replace') as f:
-                            text = f.read()
-                    else:
-                        text = _read_file(path) or ""
-                finally:
-                    if os.path.exists(_out_txt):
-                        os.remove(_out_txt)
-        except (ImportError, FileNotFoundError, subprocess.TimeoutExpired):
-            text = _read_file(path) or ""
-    elif ext.lower() == '.fb2':
-        try:
-            from bs4 import BeautifulSoup
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                soup = BeautifulSoup(f.read(), 'html.parser')
-            text = soup.get_text(separator='\n')
-        except Exception:
-            text = _read_file(path) or ""
-    else:
+    except Exception as e:
+        log.warning(f"Ebook extraction error for {path}: {e}")
         text = _read_file(path) or ""
 
+    # P1: Check if text extraction was sufficient
+    if len(text.strip()) >= MIN_TEXT_CHARS and not _is_ocr_garbage(text.strip(), min_chars=MIN_TEXT_CHARS):
+        # Clean up temp dir
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        chunks = chunk_greedy_semantic(text, ext='.txt')
+        result = []
+        short_ctx = _build_context_text(path, media_meta, short=True)
+        for i, chunk_text in enumerate(chunks):
+            full_chunk = f"{short_ctx}\n\n{chunk_text}"
+            result.append(ChunkData(
+                file_id=file_id, chunk_index=i,
+                text=full_chunk, char_count=len(full_chunk),
+                meta={'source': 'ebook'}
+            ))
+        return result
+
+    # P2: Text insufficient, try OCR on embedded images
+    if image_paths:
+        log.info(f"Ebook text insufficient ({len(text.strip())} chars), OCRing {len(image_paths)} images: {path}")
+        
+        # Batch OCR (100 images per batch)
+        BATCH_SIZE = 100
+        ocr_results = []
+        for batch_start in range(0, len(image_paths), BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, len(image_paths))
+            batch_paths = image_paths[batch_start:batch_end]
+            log.info(f"Ebook OCR pages {batch_start+1}-{batch_end}/{len(image_paths)}")
+            batch_results = _ocr_images_batch(batch_paths)
+            ocr_results.extend(batch_results)
+        
+        # Collect OCR text
+        all_ocr_text = []
+        for i, ocr_text in enumerate(ocr_results):
+            if ocr_text:
+                all_ocr_text.append(f"[Page {i+1}]\n{ocr_text}")
+        
+        combined_ocr = "\n\n".join(all_ocr_text)
+        
+        # Clean up temp images
+        for tmp_path in image_paths:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        
+        # Check OCR results
+        if not combined_ocr.strip():
+            _mark_ocr_insufficient(file_id, path, 'ebook_ocr_empty')
+            return []
+        
+        if len(combined_ocr.strip()) < MIN_TEXT_CHARS:
+            _mark_ocr_insufficient(file_id, path, f'ebook_ocr_short_{len(combined_ocr.strip())}chars')
+            return []
+        
+        if _is_ocr_garbage(combined_ocr.strip(), min_chars=MIN_TEXT_CHARS):
+            _mark_ocr_insufficient(file_id, path, 'ebook_ocr_garbled')
+            return []
+        
+        # OCR succeeded, chunk the text
+        chunks = chunk_greedy_semantic(combined_ocr, ext='.txt')
+        result = []
+        short_ctx = _build_context_text(path, media_meta, short=True)
+        for i, chunk_text in enumerate(chunks):
+            full_chunk = f"{short_ctx}\n\n{chunk_text}"
+            result.append(ChunkData(
+                file_id=file_id, chunk_index=i,
+                text=full_chunk, char_count=len(full_chunk),
+                meta={'source': 'ebook_ocr'}
+            ))
+        return result
+    
+    # P3: No images to OCR, text was insufficient
+    # Clean up
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    
     if len(text.strip()) < MIN_TEXT_CHARS:
         _mark_ocr_insufficient(file_id, path, f'ebook_short_{len(text.strip())}chars')
         return []
-
-    # Garbled text check
+    
     if _is_ocr_garbage(text.strip(), min_chars=MIN_TEXT_CHARS):
         _mark_ocr_insufficient(file_id, path, 'ebook_garbled')
         return []
+    
+    # Should not reach here, but just in case
+    return []
+
+def _extract_epub_content(epub_path: str, tmp_dir: str) -> tuple:
+    """Extract text and images from EPUB.
+    
+    Returns: (text, image_paths)
+    """
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    import uuid
+    
+    text = ""
+    image_paths = []
+    epub_tmp = None
+    
+    try:
+        # ebooklib 不支持非 ASCII 路径
+        epub_tmp = os.path.join(tmp_dir, f'temp_{uuid.uuid4().hex}.epub')
+        shutil.copyfile(epub_path, epub_tmp)
+        
+        book = epub.read_epub(epub_tmp)
+        
+        # Extract text from HTML documents
+        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+            content_bytes = item.get_content().decode('utf-8', errors='replace')
+            if not content_bytes.strip():
+                continue
+            
+            # Remove style/script but keep img tags for counting
+            content_bytes = re.sub(r'<style[^>]*>.*?</style>', '', content_bytes, flags=re.DOTALL | re.IGNORECASE)
+            content_bytes = re.sub(r'<script[^>]*>.*?</script>', '', content_bytes, flags=re.DOTALL | re.IGNORECASE)
+            content_bytes = re.sub(r'<link[^>]*/?>', '', content_bytes, flags=re.IGNORECASE)
+            
+            soup = BeautifulSoup(content_bytes, 'html.parser')
+            
+            # Count images in this document
+            img_count = len(soup.find_all('img'))
+            
+            # Extract text
+            for tag in soup.find_all(['h1', 'h2', 'h3', 'h4']):
+                tag.replace_with(f"\n\n{tag.get_text()}\n\n")
+            for tag in soup.find_all('li'):
+                tag.replace_with(f"\n- {tag.get_text()}")
+            clean = soup.get_text(separator='\n')
+            clean = re.sub(r'\n{3,}', '\n\n', clean)
+            text += clean + "\n"
+        
+        # If text is insufficient, extract images for OCR
+        if len(text.strip()) < MIN_TEXT_CHARS:
+            # Extract all images
+            for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+                img_data = item.get_content()
+                img_name = item.get_name()
+                # Save to temp dir
+                img_path = os.path.join(tmp_dir, os.path.basename(img_name))
+                with open(img_path, 'wb') as f:
+                    f.write(img_data)
+                image_paths.append(img_path)
+    
+    except Exception as e:
+        log.warning(f"EPUB extraction error: {e}")
+        text = _read_file(epub_path) or ""
+    
+    return text, image_paths
 
 
-    chunks = chunk_greedy_semantic(text, ext='.txt')
-    result = []
-    short_ctx = _build_context_text(path, media_meta, short=True)
-    for i, chunk_text in enumerate(chunks):
-        full_chunk = f"{short_ctx}\n\n{chunk_text}"
-        result.append(ChunkData(
-            file_id=file_id, chunk_index=i,
-            text=full_chunk, char_count=len(full_chunk),
-            meta={'source': 'ebook'}
-        ))
-    return result
+def _extract_mobi_content(mobi_path: str, tmp_dir: str) -> tuple:
+    """Extract text and images from MOBI.
+    
+    MOBI structure:
+    - mobi7/book.html: fallback HTML (may be image-heavy)
+    - mobi8/: KF8 format with part*.xhtml and images
+    
+    Returns: (text, image_paths)
+    """
+    import mobi
+    from bs4 import BeautifulSoup
+    
+    text = ""
+    image_paths = []
+    tempdir = None
+    
+    try:
+        tempdir, filepath = mobi.extract(mobi_path)
+        
+        # P1: Try mobi8 (KF8) first - has better structure
+        mobi8_dir = os.path.join(tempdir, 'mobi8')
+        if os.path.isdir(mobi8_dir):
+            # Extract text from all xhtml files
+            xhtml_files = []
+            for root, dirs, files in os.walk(mobi8_dir):
+                for f in files:
+                    if f.endswith(('.xhtml', '.html', '.htm')):
+                        xhtml_files.append(os.path.join(root, f))
+            
+            # Sort by name to maintain order
+            xhtml_files.sort()
+            
+            for xhtml_path in xhtml_files:
+                try:
+                    with open(xhtml_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    soup = BeautifulSoup(content, 'html.parser')
+                    page_text = soup.get_text(separator='\n').strip()
+                    if page_text:
+                        text += page_text + "\n"
+                except Exception:
+                    pass
+        
+        # P2: Fallback to mobi7 if mobi8 text is insufficient
+        if len(text.strip()) < MIN_TEXT_CHARS:
+            mobi7_dir = os.path.join(tempdir, 'mobi7')
+            if os.path.isdir(mobi7_dir):
+                for f in os.listdir(mobi7_dir):
+                    if f.endswith(('.html', '.htm')):
+                        html_path = os.path.join(mobi7_dir, f)
+                        try:
+                            with open(html_path, 'r', encoding='utf-8', errors='replace') as fh:
+                                soup = BeautifulSoup(fh.read(), 'html.parser')
+                                text += soup.get_text(separator='\n') + "\n"
+                        except Exception:
+                            pass
+        
+        # P3: If text still insufficient, extract images for OCR
+        if len(text.strip()) < MIN_TEXT_CHARS:
+            # Find all images in extracted directory
+            for root, dirs, files in os.walk(tempdir):
+                for f in files:
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                        src_path = os.path.join(root, f)
+                        # Copy to tmp_dir to avoid cleanup issues
+                        dst_path = os.path.join(tmp_dir, f)
+                        try:
+                            shutil.copy2(src_path, dst_path)
+                            image_paths.append(dst_path)
+                        except Exception:
+                            pass
+            
+            # Sort images by name
+            image_paths.sort()
+    
+    except Exception as e:
+        log.warning(f"MOBI extraction error: {e}")
+        text = _read_file(mobi_path) or ""
+    
+    finally:
+        # Clean up mobi extract directory
+        if tempdir and os.path.isdir(tempdir):
+            shutil.rmtree(tempdir, ignore_errors=True)
+    
+    return text, image_paths
 
+
+def _extract_azw3_content(azw3_path: str, tmp_dir: str) -> tuple:
+    """Extract text and images from AZW3.
+    
+    Uses ebook-convert if available, otherwise falls back to mobi extraction.
+    
+    Returns: (text, image_paths)
+    """
+    import subprocess
+    
+    text = ""
+    image_paths = []
+    
+    # Try ebook-convert first
+    out_txt = os.path.join(tmp_dir, 'converted.txt')
+    try:
+        r = subprocess.run(['ebook-convert', azw3_path, out_txt],
+                          capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and os.path.exists(out_txt):
+            with open(out_txt, 'r', encoding='utf-8', errors='replace') as f:
+                text = f.read()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    
+    # Fallback: try mobi extraction (azw3 is similar to mobi)
+    if len(text.strip()) < MIN_TEXT_CHARS:
+        try:
+            import mobi
+            tempdir, filepath = mobi.extract(azw3_path)
+            
+            # Extract text from HTML files
+            for root, dirs, files in os.walk(tempdir):
+                for f in files:
+                    if f.endswith(('.html', '.htm', '.xhtml')):
+                        html_path = os.path.join(root, f)
+                        try:
+                            from bs4 import BeautifulSoup
+                            with open(html_path, 'r', encoding='utf-8', errors='replace') as fh:
+                                soup = BeautifulSoup(fh.read(), 'html.parser')
+                                text += soup.get_text(separator='\n') + "\n"
+                        except Exception:
+                            pass
+            
+            # If text still insufficient, extract images
+            if len(text.strip()) < MIN_TEXT_CHARS:
+                for root, dirs, files in os.walk(tempdir):
+                    for f in files:
+                        if f.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                            src_path = os.path.join(root, f)
+                            dst_path = os.path.join(tmp_dir, f)
+                            try:
+                                shutil.copy2(src_path, dst_path)
+                                image_paths.append(dst_path)
+                            except Exception:
+                                pass
+                image_paths.sort()
+            
+            shutil.rmtree(tempdir, ignore_errors=True)
+        except Exception as e:
+            log.warning(f"AZW3 extraction error: {e}")
+    
+    return text, image_paths
+
+
+def _extract_fb2_content(fb2_path: str, tmp_dir: str) -> tuple:
+    """Extract text and images from FB2 (FictionBook).
+    
+    FB2 is XML-based, images are base64 encoded inline.
+    
+    Returns: (text, image_paths)
+    """
+    from bs4 import BeautifulSoup
+    import base64
+    
+    text = ""
+    image_paths = []
+    
+    try:
+        with open(fb2_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        
+        soup = BeautifulSoup(content, 'xml')
+        
+        # Extract text from body sections
+        body = soup.find('body')
+        if body:
+            text = body.get_text(separator='\n')
+        else:
+            # Fallback: extract all text
+            text = soup.get_text(separator='\n')
+        
+        # If text insufficient, extract base64 images
+        if len(text.strip()) < MIN_TEXT_CHARS:
+            images = soup.find_all('image')
+            for i, img in enumerate(images):
+                # FB2 images are referenced by id, actual data in <binary>
+                img_id = img.get('l:href') or img.get('{http://www.w3.org/1999/xlink}href')
+                if img_id and img_id.startswith('#'):
+                    img_id = img_id[1:]
+                
+                # Find the binary element
+                binary = soup.find('binary', {'id': img_id})
+                if binary and binary.string:
+                    try:
+                        # Decode base64
+                        img_data = base64.b64decode(binary.string)
+                        # Determine extension from content-type
+                        content_type = binary.get('content-type', 'image/jpeg')
+                        ext = '.jpg' if 'jpeg' in content_type else '.png'
+                        img_path = os.path.join(tmp_dir, f'fb2_img_{i}{ext}')
+                        with open(img_path, 'wb') as f:
+                            f.write(img_data)
+                        image_paths.append(img_path)
+                    except Exception:
+                        pass
+    
+    except Exception as e:
+        log.warning(f"FB2 extraction error: {e}")
+        text = _read_file(fb2_path) or ""
+    
+    return text, image_paths
 
 def _ocr_embedded_office_images(zip_path: str, media_prefix: str, results: list):
     """P2: Extract embedded images from Office file and OCR them.

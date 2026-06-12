@@ -53,6 +53,26 @@ log = logging.getLogger("ocr_server")
 
 # Global worker pool
 _worker_pool = None
+_worker_count = 4  # default, will be set in main()
+
+
+def _restart_worker_pool():
+    """Restart the worker pool when workers get stuck."""
+    global _worker_pool, _worker_count
+    log.info("Restarting worker pool...")
+    
+    # Terminate the old pool
+    if _worker_pool is not None:
+        try:
+            _worker_pool.terminate()
+            _worker_pool.join(timeout=5)
+        except Exception as e:
+            log.warning(f"Error terminating old pool: {e}")
+    
+    # Create new pool
+    ctx = multiprocessing.get_context('spawn')
+    _worker_pool = ctx.Pool(processes=_worker_count, initializer=init_worker)
+    log.info(f"Worker pool restarted with {_worker_count} processes")
 
 
 def init_worker():
@@ -121,9 +141,24 @@ class OCRHandler(BaseHTTPRequestHandler):
                     self._json_response({"results": []})
                     return
 
-                # Dispatch to worker pool for parallel processing
-                results = _worker_pool.map(ocr_single_image, image_paths)
-                self._json_response({"results": results})
+                # Use map_async with timeout to avoid infinite blocking
+                # If a worker gets stuck, we need to restart the pool
+                TIMEOUT_PER_IMAGE = 30  # seconds per image
+                timeout = max(60, len(image_paths) * TIMEOUT_PER_IMAGE)
+                
+                try:
+                    async_result = _worker_pool.map_async(ocr_single_image, image_paths)
+                    results = async_result.get(timeout=timeout)
+                    self._json_response({"results": results})
+                except multiprocessing.TimeoutError:
+                    log.error(f"OCR timeout after {timeout}s for {len(image_paths)} images, restarting worker pool...")
+                    # Restart the worker pool to recover from stuck workers
+                    _restart_worker_pool()
+                    self._json_response({"results": [None] * len(image_paths), "error": "timeout"})
+                except Exception as pool_err:
+                    log.error(f"Pool error: {pool_err}, restarting worker pool...")
+                    _restart_worker_pool()
+                    self._json_response({"results": [None] * len(image_paths), "error": str(pool_err)})
 
             except Exception as e:
                 log.error(f"Request error: {e}")

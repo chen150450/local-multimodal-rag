@@ -982,14 +982,62 @@ def run_rag_process():
     log.info(f"Starting {n_processes} worker processes (audio_threads={args.audio_threads} per worker)...")
     
     # PaddleOCR is now lazy-loaded per worker process (CPU mode, no daemon needed)
-
-    # Start describer threads (Qwen + LMStudio, process OCR-failed files)
-    describer_threads = start_describers()
-    
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
     pool = multiprocessing.Pool(processes=n_processes)
     
-    # GPU consumer in main process - load model first
-    gpu = GPUConsumer(mp_queue=None, num_producers=n_processes)
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
+    # ⚠️ CRITICAL: Create pool BEFORE starting any threads!
+    # Fork copies lock state but not threads — if threads hold locks when fork happens,
+    # workers inherit deadlocked locks (fork+thread deadlock).
+    pool = multiprocessing.Pool(processes=n_processes)
+    
+    # Start describer threads AFTER pool is created (Qwen + LMStudio, process OCR-failed files)
+    describer_threads = start_describers()
     gpu._total_files = len(file_rows)
     gpu.load_model()
     log.info("✅ Jina v5 loaded, ready for streaming embedding")
