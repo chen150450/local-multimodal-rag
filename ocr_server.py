@@ -5,8 +5,6 @@ PaddleOCR GPU API Server — persistent service for RAG pipeline.
 Uses multiprocessing.Pool with spawn mode to enable parallel OCR on GPU.
 Each worker process independently initializes CUDA and loads PaddleOCR.
 
-Configuration loaded from config.yaml via config_loader.
-
 Usage:
     python3 ocr_server.py [--port 8002] [--workers 4]
 
@@ -29,22 +27,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
-# Import config loader
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-try:
-    from config_loader import get_config
-    config = get_config()
-    ocr_config = config['ocr']
-    DEFAULT_PORT = ocr_config['port']
-    DEFAULT_WORKERS = ocr_config['workers']
-    OCR_LANG = ocr_config['lang']
-    OCR_USE_GPU = ocr_config.get('use_gpu', True)
-except ImportError:
-    DEFAULT_PORT = 8002
-    DEFAULT_WORKERS = 4
-    OCR_LANG = 'ch'
-    OCR_USE_GPU = True
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -61,11 +43,11 @@ def _restart_worker_pool():
     global _worker_pool, _worker_count
     log.info("Restarting worker pool...")
     
-    # Terminate the old pool
+    # Terminate the old pool (force kill workers)
     if _worker_pool is not None:
         try:
-            _worker_pool.terminate()
-            _worker_pool.join(timeout=5)
+            _worker_pool.terminate()  # Send SIGTERM to workers
+            _worker_pool.join()       # Wait for them to exit (no timeout param)
         except Exception as e:
             log.warning(f"Error terminating old pool: {e}")
     
@@ -78,19 +60,18 @@ def _restart_worker_pool():
 def init_worker():
     """Initialize PaddleOCR in each worker process."""
     global _ocr
-    gpu_label = "GPU" if OCR_USE_GPU else "CPU"
-    log.info(f"Worker {os.getpid()}: Loading PaddleOCR ({gpu_label} mode)...")
+    log.info(f"Worker {os.getpid()}: Loading PaddleOCR (GPU mode)...")
     from paddleocr import PaddleOCR
     # 抑制 PaddleOCR 内部的 angle classifier WARNING（每张图片都输出一次）
     import logging as _logging
     _logging.getLogger('ppocr').setLevel(_logging.ERROR)
     _ocr = PaddleOCR(
         use_textline_orientation=True,
-        lang=OCR_LANG,
-        use_gpu=OCR_USE_GPU,
+        lang='ch',
+        use_gpu=True,
         cls=True,
     )
-    log.info(f"Worker {os.getpid()}: ✅ PaddleOCR loaded ({gpu_label} mode)")
+    log.info(f"Worker {os.getpid()}: ✅ PaddleOCR loaded (GPU mode)")
 
 
 def ocr_single_image(image_path: str) -> str | None:
@@ -178,21 +159,14 @@ class OCRHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global _worker_pool
+    global _worker_pool, _worker_count
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=DEFAULT_PORT, help=f'Server port (default: {DEFAULT_PORT})')
-    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS, help=f'Number of OCR workers (default: {DEFAULT_WORKERS})')
-    parser.add_argument('--config', type=str, default="", help="Path to config.yaml")
+    parser.add_argument('--port', type=int, default=8002, help='Server port (default: 8002)')
+    parser.add_argument('--workers', type=int, default=4, help='Number of OCR workers (default: 4)')
     args = parser.parse_args()
 
-    # Load custom config if specified
-    if args.config:
-        from config_loader import reset_config_cache, load_config
-        reset_config_cache()
-        config = load_config(args.config)
-        ocr_config = config['ocr']
-
+    _worker_count = args.workers
     log.info(f"🚀 Starting OCR API server on port {args.port} with {args.workers} workers (spawn mode)...")
     
     # Use spawn context to avoid CUDA context loss from fork
